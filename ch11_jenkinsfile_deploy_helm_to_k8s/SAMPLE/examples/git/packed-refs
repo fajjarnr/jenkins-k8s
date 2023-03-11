@@ -1,0 +1,4 @@
+# pack-refs with: peeled fully-peeled sorted 
+33a3db6e557b8523f1ecd8aa60627b6e2af7c27b refs/remotes/origin/gh-pages
+4888ba8fb8180dd0c36d1e84c1fcafc6efd81532 refs/remotes/origin/main
+f3dc419e558e6ccebce2ed447384e5d2e11de2f9 refs/tags/hello-world-0.1.0

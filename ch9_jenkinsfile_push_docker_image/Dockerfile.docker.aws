@@ -1,0 +1,18 @@
+FROM docker:19.03.1
+RUN apk add --no-cache \
+        python3 \
+        py3-pip \
+    && pip3 install --upgrade pip \
+    && pip3 install \
+        awscli \
+    && rm -rf /var/cache/apk/*
+
+# make sure to let it sleep otherwise docker container exists right away
+CMD ["sleep", "99d"]
+
+# USAGE
+# docker build --no-cache -t docker-aws -f Dockerfile.docker.aws .
+# docker run --rm -d --name docker-aws docker-aws:latest /bin/sh -c "sleep 500"
+# docker exec -it docker-aws aws
+# docker tag docker-aws xxxx.dkr.ecr.REGION.amazonaws.com/ecr-jenkins:docker-aws
+# docker push xxxx.dkr.ecr.REGION.amazonaws.com/ecr-jenkins:docker-aws

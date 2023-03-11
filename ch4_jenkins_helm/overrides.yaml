@@ -1,0 +1,37 @@
+controller:
+  # use Docker in Docker jenkins, so that jenkins container can build docker image inside
+  # image: mesosphere/jenkins-dind # https://hub.docker.com/r/mesosphere/jenkins-dind
+  # tag: 0.9.0
+  statefulSetLabels:
+    app: jenkins  # needed for istio
+    version: 2.0.0  # needed for istio
+  serviceLabels:
+    app: jenkins  # needed for istio
+    version: 2.0.0  # needed for istio
+  podLabels:
+    app: jenkins  # needed for istio
+    version: 2.0.0  # needed for istio
+  additionalPlugins: # WARNING: uncommenting out these will cause pod to crash due to "cp -r not specified". So for now, these plugins need be installed manually
+    - matrix-auth:2.6.4
+    # - kubernetes:1.25.7
+    # - workflow-job:2.39
+    # - workflow-aggregator:2.6
+    # - credentials-binding:1.23
+    # - git:4.2.2
+    # - configuration-as-code:1.41
+    # - bitbucket:.1.1.11 # https://plugins.jenkins.io/bitbucket/
+    # - bitbucket-build-status-notifier:1.4.2 # https://plugins.jenkins.io/bitbucket-build-status-notifier/
+    # - bitbucket-oauth:0.10
+    # - docker-build-publish:1.554.2  # https://plugins.jenkins.io/docker-build-publish/
+    # - amazon-ecr:1.6 # https://plugins.jenkins.io/amazon-ecr/
+    # - slack:2.40 # https://plugins.jenkins.io/slack/
+    # - blueocean:1.23.2 # https://plugins.jenkins.io/blueocean/
+    # - disk-usage:0.28 # https://plugins.jenkins.io/disk-usage/
+    # - ws-cleanup:0.38 # https://plugins.jenkins.io/ws-cleanup/
+    # - timestamper:1.11.3 # https://plugins.jenkins.io/timestamper/
+    # - build-timeout:1.20 # https://plugins.jenkins.io/build-timeout/
+  JCasC:
+    defaultConfig: false # need to disable this otherwise existing plugins and pipeline jobs won't be loaded and you will face "SEVERE	jenkins.InitReactorRunner$1#onTaskFailed: Failed Loading plugin" and "WARNING	c.c.h.p.folder.AbstractFolder#loadChildren: could not load /var/jenkins_home/jobs/Peerwell-API/branches/feature-health-liveness-probe"
+
+serviceAccount:
+  create: false # by default it'll create

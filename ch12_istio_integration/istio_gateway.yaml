@@ -1,0 +1,53 @@
+apiVersion: networking.istio.io/v1alpha3
+kind: Gateway
+metadata:
+  name: jenkins-private-gateway
+  namespace: jenkins
+spec:
+  selector:
+    istio: privateingressgateway # use private one, not the istio default controller
+  servers: # defines L7 host, port, and protocol
+  - port:
+      number: 80 # jenkins listens to HTTP only
+      name: http
+      protocol: HTTP
+    hosts: # host in http header
+    - jenkins.YOUR_DOMAIN.co
+    - jenkins/*.us-east-1.elb.amazonaws.com # using AWS internal ELB  # limit VirtualService in specified namespace to bind to this gateway host. Ref: https://archive.istio.io/v1.5/pt-br/docs/reference/config/networking/gateway/
+    tls: 
+      httpsRedirect: true # sends 301 redirect for http requests
+  - port:
+      number: 443
+      name: https-to-http
+      protocol: HTTP # NOTE: HTTPS traffic ends on AWS ELB, so select HTTP not HTTPS
+    hosts:
+    - jenkins.YOUR_DOMAIN.co
+    - jenkins/*.us-east-1.elb.amazonaws.com # using AWS internal ELB  # limit VirtualService in specified namespace to bind to this gateway host. Ref: https://archive.istio.io/v1.5/pt-br/docs/reference/config/networking/gateway/
+
+--- 
+apiVersion: networking.istio.io/v1alpha3
+kind: Gateway
+metadata:
+  name: jenkins-public-gateway
+  namespace: jenkins
+spec:
+  selector:
+    istio: ingressgateway # use the istio default controller
+  servers: # defines L7 host, port, and protocol
+  - port:
+      number: 80 # jenkins listens to HTTP only
+      name: http
+      protocol: HTTP
+    hosts: # host in http header
+    - public.jenkins.YOUR_DOMAIN.co
+    - jenkins/*.us-east-1.elb.amazonaws.com
+    # tls:
+    #   mode: SIMPLE # enables HTTPS on this port
+    #   credentialName: gateway-cert-aws-elb-dns # must be the same as secret
+  - port:
+      number: 443
+      name: https-to-http
+      protocol: HTTP # NOTE: HTTPS traffic ends on AWS ELB, so select HTTP not HTTPS
+    hosts:
+    - public.jenkins.YOUR_DOMAIN.co
+    - jenkins/*.us-east-1.elb.amazonaws.com

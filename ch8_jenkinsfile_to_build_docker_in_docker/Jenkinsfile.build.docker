@@ -1,0 +1,50 @@
+pipeline {
+    agent {
+        kubernetes {
+            yaml '''
+apiVersion: v1
+kind: Pod  # <-------- pod where jenkins slave agent container (jnlp-slave) will be running
+spec:
+  serviceAccountName: jenkins # this is for IRSA (IAM role for service account)
+  containers:
+  - name: docker # <---------- docker client
+    image: docker:19.03.1
+    command:
+    - sleep
+    args:
+    - 99d
+    env:
+      - name: DOCKER_HOST
+        value: tcp://localhost:2375
+  - name: docker-daemon
+    image: docker:19.03.1-dind # <-------- special image tag
+    securityContext:
+      privileged: true
+    env:
+      - name: DOCKER_TLS_CERTDIR
+        value: ""
+'''
+            defaultContainer 'docker'
+        }
+    }
+
+    stages {
+        stage('Build Docker Image') {
+            steps {
+                git url: 'https://github.com/ianmiell/simple-dockerfile.git'
+                    
+                container('docker') {  // <-- specify which container in the pod YAML to run below as a host container
+                    sh '''
+                        docker version
+                        docker ps -a
+                        docker build --tag custom_image_1 .
+
+                        echo "docker ps from inside the container"
+                        docker ps -a
+                        docker images
+                    '''
+                } // container
+            } // steps
+        } // stage
+    } // stages
+} // pipeline

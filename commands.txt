@@ -1,0 +1,254 @@
+export AWS_PROFILE=aws-demo
+AWS_REGION="ap-southeast-1"
+CLUSTER_NAME="eks-from-eksctl"
+ACCOUNT_ID=266981300450
+
+#######
+# CH2
+#######
+eksctl create cluster \
+    --name ${CLUSTER_NAME} \
+    --version 1.21 \
+    --region ${AWS_REGION} \
+    --nodegroup-name workers \
+    --node-type t3.large \
+    --nodes 1 \
+    --nodes-min 1 \
+    --nodes-max 2 \
+    --ssh-access \
+    --ssh-public-key ~/.ssh/aws-demo/eks-demo-workers.pem.pub \
+    --managed
+
+
+
+#######
+# CH3
+#######
+# Retrieve the VPC ID that your cluster is in
+vpc_id=$(aws eks describe-cluster \
+    --name ${CLUSTER_NAME} \
+    --query "cluster.resourcesVpcConfig.vpcId" \
+    --region ${AWS_REGION} \
+    --output text)
+echo ${vpc_id}
+
+
+# Retrieve the CIDR range for your cluster's VPC
+cidr_range=$(aws ec2 describe-vpcs \
+    --vpc-ids $vpc_id \
+    --query "Vpcs[].CidrBlock" \
+    --region ${AWS_REGION} \
+    --output text)
+echo ${cidr_range}
+
+
+# Create EFS security group inside the VPC
+security_group_id=$(aws ec2 create-security-group \
+    --group-name EfsSecurityGroup \
+    --description "EFS security group" \
+    --vpc-id ${vpc_id} \
+    --region ${AWS_REGION} \
+    --output text)
+echo ${security_group_id}   
+
+
+# create SG rule for NFS. EFS SG must specify VPC CIDR as source CIDR
+aws ec2 authorize-security-group-ingress \
+    --group-id ${security_group_id} \
+    --protocol tcp \
+    --port 2049 \
+    --region ${AWS_REGION} \
+    --cidr ${cidr_range}
+
+
+# Create an Amazon EFS file system 
+file_system_id=$(aws efs create-file-system \
+    --region ${AWS_REGION} \
+    --performance-mode generalPurpose \
+    --query 'FileSystemId' \
+    --region ${AWS_REGION} \
+    --output text)
+echo ${file_system_id}
+
+
+# get private subnets' IDs
+aws ec2 describe-subnets \
+    --filters "Name=vpc-id,Values=${vpc_id}" \
+    --query 'Subnets[*].{SubnetId: SubnetId,AvailabilityZone: AvailabilityZone,CidrBlock: CidrBlock}' \
+    --region ${AWS_REGION} \
+    --output table
+
+
+
+#################################
+# MANUALLY GET PRIVATE SUBNET IDS
+#################################
+# set public subnet IDs to yours here
+subnets=("subnet-073c4b763cef4ce6f" "subnet-034aba2959df8df32" "subnet-0888ce07a941424ae")
+echo ${subnets[@]}
+
+# create EFS mount targets for public (only for demo, as EKS worker node is in public subnet) subnets that EKS worker nodes are in
+for subnet in "${subnets[@]}"; do
+  aws efs create-mount-target \
+      --file-system-id ${file_system_id} \
+      --subnet-id ${subnet} \
+      --security-groups ${security_group_id} \
+      --region ${AWS_REGION} 
+done
+
+
+#######
+# CH3.3
+#######
+
+# create IAM policy first
+aws iam create-policy \
+    --policy-name EKS_EFS_CSI_Driver_Policy \
+    --policy-document file://eks_efs_csi_driver_iam_policy.json
+
+# associate IAM OIDC provider with cluster
+eksctl utils associate-iam-oidc-provider \
+  --region=${AWS_REGION} \
+  --cluster=${CLUSTER_NAME} \
+  --approve
+
+
+# create k8s service account and IAM role
+eksctl create iamserviceaccount \
+    --name efs-csi-controller-sa \
+    --namespace kube-system \
+    --cluster ${CLUSTER_NAME} \
+    --attach-policy-arn arn:aws:iam::${ACCOUNT_ID}:policy/EKS_EFS_CSI_Driver_Policy \
+    --approve \
+    --override-existing-serviceaccounts \
+    --region ${AWS_REGION}
+
+# how to delete in case you messed up creating
+# eksctl delete iamserviceaccount \
+                --name efs-csi-controller-sa \
+                --cluster $CLUSTER_NAME \
+                --region $AWS_REGION \
+                --namespace kube-system
+
+#######
+# CH3.4
+#######
+
+#################################
+# MANUALLY GET REPO URI from here: https://docs.aws.amazon.com/eks/latest/userguide/add-ons-images.html
+#################################
+# NOTE: change image repo URI to your own region's
+helm install aws-efs-csi-driver aws-efs-csi-driver/aws-efs-csi-driver \
+    --namespace kube-system \
+    --set image.repository=602401143452.dkr.ecr.ap-southeast-1.amazonaws.com/eks/aws-efs-csi-driver \
+    --set controller.serviceAccount.create=false
+
+
+#######
+# CH3.5
+#######
+PUBLIC_IP_EC2=13.212.169.14
+ssh-add -k ~/.ssh/aws-demo/esk-demo-workers.pem
+ssh -A ec2-user@${PUBLIC_IP_EC2}
+sudo su
+mkdir /mnt/efs
+
+#################################
+# MANUALLY set shell variables
+#################################
+file_system_id="fs-01153a49144b0332a"
+AWS_REGION="ap-southeast-1"
+
+mount -t nfs -o nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport ${file_system_id}.efs.${AWS_REGION}.amazonaws.com:/ /mnt/efs
+echo "${file_system_id}.efs.${AWS_REGION}.amazonaws.com:/ /mnt/efs nfs defaults,vers=4.1 0 0" >> /etc/fstab
+cat /etc/fstab 
+
+df -h
+exit
+
+
+
+#######
+# CH3.6
+#######
+
+#################################
+# MANUALLY edit fileSystemId value in the yaml
+#################################
+
+cd ch3_efs/
+
+# for Mac, pass -i '' to overwrite the file
+sed -i '' "s/fileSystemId:.*/fileSystemId: ${file_system_id}/g" dynamic_provisioning_storageclass.yaml
+
+cat dynamic_provisioning_storageclass.yaml
+
+kubectl apply -f dynamic_provisioning_storageclass.yaml
+
+kubectl get sc
+
+#kubectl apply -f test_efs_pod.yaml 
+
+# make sure PVC is successfully bound. If you didn't create IAM role for service account for efs-csi-driver, then the driver would've failed to create storage space in EFS
+#kubectl get pvc
+
+#kubectl get po -w
+
+#kubectl exec -ti efs-app -- tail -f /data/out
+
+
+ssh -A ec2-user@PUBLIC_IP_EKS_WORKER_NODE
+sudo ls /mnt/efs/dynamic_provisioning/
+pvc-71a3b8ed-ec36-4302-9804-ccee46cbda5e
+
+sudo cat /mnt/efs/dynamic_provisioning/pvc-71a3b8ed-ec36-4302-9804-ccee46cbda5e/out
+Sun Sep 12 11:19:36 UTC 2021
+Sun Sep 12 11:19:41 UTC 2021
+
+exit
+
+k delete -f test_efs_pod.yaml 
+
+
+#######
+# CH5
+#######
+
+#################################
+# MANUALLY edit fileSystemId value in the yaml
+#################################
+
+cd ../ch5_pvc_for_jenkins/
+
+kubectl create namespace jenkins
+kubectl apply -f pvc_jenkins.yaml
+
+# make sure status is bound after 5 sec or so
+kubectl get pvc -n jenkins
+
+
+#######
+# CH6
+#######
+
+cd ../ch6_install_jenkins_helm/
+
+helm install jenkins jenkins/jenkins \
+    -n jenkins \
+    -f overrides.yaml
+
+watch -t 'kubectl get pod -n jenkins'
+
+
+# Access Jenkins from a browser at localhost:8080
+# configure k8s plugin from jenkins dashboard manually
+kubectl --namespace jenkins port-forward svc/jenkins 8080:8080
+
+
+
+################
+# CLEAN UP
+################
+eksctl delete cluster --name ${CLUSTER_NAME} --region ${AWS_REGION}
+
+# NOTE: manually delete EFS from Console too, othwewise, ENIs and subnets can't be deleted 

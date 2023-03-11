@@ -1,0 +1,60 @@
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: jenkins
+  namespace: jenkins
+spec:
+  hosts:
+  - jenkins.YOUR_DOMAIN.co
+  #- internal-a64095ec1a0da4d7d9a83f8253bb79c5-1484243758.us-east-1.elb.amazonaws.com # using AWS internal ELB
+  gateways: # using gateways field, it'll be exposed externally
+  # WARNING: this is legacy format (i.e. gateway.namespace.svc.cluster.local), which breaks in v1.6.7-1.6.8
+  #- jenkins-private-gateway.jenkins.svc.cluster.local # Don't prepend jenkins/ as istio complains "configuration is invalid: invalid value for gateway name:"
+  - jenkins/jenkins-private-gateway
+  http:
+  - route:
+    - destination:
+        host: jenkins.jenkins.svc.cluster.local # specify service name
+        port:
+          number: 8080
+
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: jenkins-public-webhook
+  namespace: jenkins
+spec:
+  hosts:
+  - public.jenkins.YOUR_DOMAIN.co
+  - 12345.us-east-1.elb.amazonaws.com # use public NLB
+  gateways: # using gateways field, it'll be exposed externally
+  # this is legacy format (i.e. gateway.namespace.svc.cluster.local), which breaks in v1.6.7-1.6.8
+  # - jenkins-public-gateway.jenkins.svc.cluster.local
+  - jenkins/jenkins-public-gateway
+  http:
+  - match:
+    - uri:
+        exact: /bitbucket-hook/ # only expose this endpoint for Jenkins
+      ignoreUriCase: true
+    route:
+    - destination:
+        host: jenkins.jenkins.svc.cluster.local # specify service name
+        port:
+          number: 8080
+
+---
+# WARNING: from istio v1.7+, disabling mtls might cause error "istio 503 upstream connect error or disconnect/reset before headers. reset reason: connection termination"
+# refs: https://stackoverflow.com/questions/53103984/istio-destinationrule-gives-upstream-connect-error-or-disconnect-reset-before-he
+# ref: https://istio.io/latest/docs/ops/common-problems/network-issues/#503-errors-after-setting-destination-rule
+
+# apiVersion: networking.istio.io/v1alpha3
+# kind: DestinationRule
+# metadata:
+#   name: jenkins
+#   namespace: jenkins
+# spec:
+#   host: jenkins.jenkins.svc.cluster.local
+#   trafficPolicy:
+#     tls:
+#       mode: DISABLE

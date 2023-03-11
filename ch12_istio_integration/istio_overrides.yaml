@@ -1,0 +1,155 @@
+apiVersion: install.istio.io/v1alpha1
+kind: IstioOperator
+spec:
+  components: # ref: https://istio.io/latest/docs/reference/config/istio.operator.v1alpha1/#IstioOperatorSpec
+    egressGateways:
+    - enabled: true
+      k8s:
+        env:
+        - name: ISTIO_META_ROUTER_MODE
+          value: standard
+        hpaSpec:
+          maxReplicas: 5
+          metrics:
+          - resource:
+              name: cpu
+              targetAverageUtilization: 80
+            type: Resource
+          minReplicas: 1
+          scaleTargetRef:
+            apiVersion: apps/v1
+            kind: Deployment
+            name: istio-egressgateway
+        resources:
+          limits:
+            cpu: 2000m
+            memory: 1024Mi
+          requests:
+            cpu: 10m
+            memory: 40Mi
+        service:
+          ports:
+          - name: http2
+            port: 80
+            protocol: TCP
+            targetPort: 8080
+          - name: https
+            port: 443
+            protocol: TCP
+            targetPort: 8443
+          - name: tls
+            port: 15443
+            protocol: TCP
+            targetPort: 15443
+        strategy:
+          rollingUpdate:
+            maxSurge: 100%
+            maxUnavailable: 25%
+      name: istio-egressgateway
+    ingressGateways:
+    - enabled: true
+      name: istio-ingressgateway
+      k8s:
+        service:
+          ports:
+          - name: status-port
+            port: 15021
+            targetPort: 15021
+          - name: http2
+            port: 80
+            protocol: TCP
+            targetPort: 8080
+          - name: https
+            port: 443
+            protocol: TCP
+            targetPort: 8443
+          - name: tls
+            port: 15443
+            protocol: TCP
+            targetPort: 15443      
+        serviceAnnotations:
+          # if using NLB, then can't terminate HTTPS. 
+          # Won't use GA with NLB as K8s service with NLB is still alpha feature and not for production cluster
+          # instead, deploy NLB in front of CLB (K8s service) to provide two static IPs 
+          #service.beta.kubernetes.io/aws-load-balancer-type: nlb
+          # enable ELB access log
+          # ref: https://www.giantswarm.io/blog/load-balancer-service-use-cases-on-aws
+          service.beta.kubernetes.io/aws-load-balancer-access-log-enabled: "true"
+          # enable TLS termination at AWS ELB level
+          service.beta.kubernetes.io/aws-load-balancer-ssl-cert: "arn:aws:acm:us-east-1:xxxxxxx:certificate/xxxxxxx-7b9b-4540-93ee-xxxxxxx" # this cert is "*.YOUR_DOMAIN.co" and "YOUR_DOMAIN.co" with DNS validation
+          service.beta.kubernetes.io/aws-load-balancer-backend-protocol: http
+          service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "443"
+          service.beta.kubernetes.io/aws-load-balancer-ssl-negotiation-policy: "ELBSecurityPolicy-TLS-1-2-2017-01" # disable TSLv1.0-1.1
+    - enabled: true
+      name: istio-private-ingressgateway
+      label:
+        istio: privateingressgateway # this will be needed as gateway will look for this selector
+        app: istio-private-ingressgateway
+      k8s:
+        service:
+          ports:
+          - name: status-port
+            port: 15021
+            targetPort: 15021
+          - name: http2
+            port: 80
+            targetPort: 8080
+          - name: https
+            port: 443
+            targetPort: 8443
+          - name: tcp
+            port: 31400
+            targetPort: 31400
+          - name: tls
+            port: 15443
+            targetPort: 15443      
+        serviceAnnotations:
+          # ref: https://medium.com/swlh/public-and-private-istio-ingress-gateways-on-aws-f968783d62fe
+          service.beta.kubernetes.io/aws-load-balancer-internal: "true" # make this CLB private. Refs for service annotations for AWS ELB: https://kubernetes.io/docs/concepts/cluster-administration/cloud-providers/#aws, https://docs.aws.amazon.com/eks/latest/userguide/load-balancing.html
+          # enable ELB access log
+          # ref: https://www.giantswarm.io/blog/load-balancer-service-use-cases-on-aws
+          service.beta.kubernetes.io/aws-load-balancer-access-log-enabled: "true"
+          # enable TLS termination at AWS ELB level
+          service.beta.kubernetes.io/aws-load-balancer-ssl-cert: "arn:aws:acm:us-east-1:xxxxxxx:certificate/xxxxxxx-7b9b-4540-93ee-xxxxxxx" # this cert is "*.YOUR_DOMAIN.co" and "YOUR_DOMAIN.co" with DNS validation
+          service.beta.kubernetes.io/aws-load-balancer-backend-protocol: http
+          service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "443"
+          service.beta.kubernetes.io/aws-load-balancer-ssl-negotiation-policy: "ELBSecurityPolicy-TLS-1-2-2017-01" # disable TSLv1.0-1.1
+          # enable cross-zone load balancing to better handle instance loss in one AZ
+          service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+  values:
+    gateways: # configure gateways: https://istio.io/latest/docs/setup/install/istioctl/#configure-gateways
+      istio-ingressgateway: # for internal ELB
+        autoscaleEnabled: false
+        env: {}
+        # meshExpansionPorts:
+        # - name: tcp-pilot-grpc-tls
+        #   port: 15011
+        #   targetPort: 15011
+        # - name: tcp-istiod
+        #   port: 15012
+        #   targetPort: 15012
+        # - name: tcp-citadel-grpc-tls
+        #   port: 8060
+        #   targetPort: 8060
+        # - name: tcp-dns-tls
+        #   port: 853
+        #   targetPort: 8853
+        name: istio-private-ingressgateway
+        secretVolumes:
+        - mountPath: /etc/istio/ingressgateway-certs
+          name: ingressgateway-certs
+          secretName: istio-ingressgateway-certs
+        - mountPath: /etc/istio/ingressgateway-ca-certs
+          name: ingressgateway-ca-certs
+          secretName: istio-ingressgateway-ca-certs
+        type: LoadBalancer
+    global:
+      hub: xxxxxxx.dkr.ecr.us-east-1.amazonaws.com # To workaround dockerhub rate limiting. Refs: https://istio.io/latest/docs/setup/install/helm/, https://istio.io/latest/docs/setup/install/helm/, https://istio.io/latest/docs/setup/install/istioctl/, https://istio.io/latest/docs/setup/install/operator/
+      tag: 1.8.2
+      imagePullPolicy: IfNotPresent # To workaround dockerhub rate limiting. Ref: https://medium.com/@kenneth.skertchly/fix-docker-pull-rate-limit-issues-in-istio-sidecars-9f7a410acefd
+      proxy:
+        tracer: datadog
+    pilot:
+      traceSampling: 100.0
+      env:
+        ENABLE_LEGACY_FSGROUP_INJECTION: true # for EKS 1.19, workaround for the issue "open ./var/run/secrets/tokens/istio-token: permission denied" refs: https://github.com/istio/istio/issues/31740#issuecomment-811292371, https://discuss.istio.io/t/istio-token-permissions-problem-on-eks-failed-to-fetch-token-from-file-open-var-run-secrets-tokens-istio-token-permission-denied/10028/8
